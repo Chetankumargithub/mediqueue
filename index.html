@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MediQueue — Emergency Triage System</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+  <!-- ── HEADER ─────────────────────────────────────── -->
+  <header class="header">
+    <div class="header-left">
+      <div class="logo">
+        <span class="logo-icon">+</span>
+        <div>
+          <h1>MediQueue</h1>
+          <p class="header-sub">Emergency Triage Priority System</p>
+        </div>
+      </div>
+    </div>
+    <div class="header-right">
+      <span class="live-dot"></span>
+      <span class="live-label">Live</span>
+      <span class="sdg-badge">SDG 3 — Good Health</span>
+      <button class="btn btn-outline" onclick="resetPipeline()">↺ Reset</button>
+      <a class="btn btn-outline" href="/api/download-csv">↓ CSV</a>
+    </div>
+  </header>
+
+  <!-- ── METRIC CARDS ───────────────────────────────── -->
+  <section class="metrics-row" id="metricsRow">
+    <div class="metric-card">
+      <div class="metric-label">Total patients</div>
+      <div class="metric-value" id="mTotal">—</div>
+      <div class="metric-sub">Generated dataset</div>
+    </div>
+    <div class="metric-card critical">
+      <div class="metric-label">Critical</div>
+      <div class="metric-value" id="mCritical">—</div>
+      <div class="metric-sub">Score ≥ 60 · Treat immediately</div>
+    </div>
+    <div class="metric-card moderate">
+      <div class="metric-label">Moderate</div>
+      <div class="metric-value" id="mModerate">—</div>
+      <div class="metric-sub">Score 30–59 · Within 30 min</div>
+    </div>
+    <div class="metric-card stable">
+      <div class="metric-label">Stable</div>
+      <div class="metric-value" id="mStable">—</div>
+      <div class="metric-sub" id="mStableSub">Score &lt; 30 · Within 2 hrs</div>
+    </div>
+  </section>
+
+  <!-- ── CHARTS ROW ─────────────────────────────────── -->
+  <section class="charts-row">
+    <div class="card">
+      <div class="card-header">
+        <h2>Patient distribution by triage level</h2>
+      </div>
+      <div class="chart-wrap" style="height:240px;">
+        <canvas id="barChart"></canvas>
+      </div>
+      <div class="legend" id="barLegend"></div>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <h2>Acuity score distribution</h2>
+      </div>
+      <div class="chart-wrap" style="height:240px;">
+        <canvas id="histChart"></canvas>
+      </div>
+      <div class="legend" id="histLegend">
+        <span class="leg-item"><span class="leg-dot" style="background:#E24B4A"></span>Critical (≥60)</span>
+        <span class="leg-item"><span class="leg-dot" style="background:#EF9F27"></span>Moderate (30–59)</span>
+        <span class="leg-item"><span class="leg-dot" style="background:#639922"></span>Stable (&lt;30)</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── RE-TRIAGE PANEL ────────────────────────────── -->
+  <section class="card retriage-card">
+    <div class="card-header">
+      <h2>Live re-triage — update patient vitals</h2>
+      <span class="badge-info">Updates queue order in real time</span>
+    </div>
+    <div class="retriage-form">
+      <div class="form-group">
+        <label>Patient ID</label>
+        <select id="rtPatientId"></select>
+      </div>
+      <div class="form-group">
+        <label>O₂ Saturation (%)</label>
+        <input type="number" id="rtO2" placeholder="e.g. 87" min="70" max="100" />
+      </div>
+      <div class="form-group">
+        <label>Heart Rate (bpm)</label>
+        <input type="number" id="rtHr" placeholder="e.g. 140" min="30" max="200" />
+      </div>
+      <div class="form-group">
+        <label>Pain Level (1–10)</label>
+        <input type="number" id="rtPain" placeholder="e.g. 8" min="1" max="10" />
+      </div>
+      <div class="form-group form-actions">
+        <button class="btn btn-primary" onclick="submitRetriage()">Update patient</button>
+        <button class="btn btn-secondary" onclick="applyWaitBoost()">Apply wait boost</button>
+      </div>
+    </div>
+    <div id="rtFeedback"></div>
+  </section>
+
+  <!-- ── PRIORITY QUEUE TABLE ───────────────────────── -->
+  <section class="card table-card">
+    <div class="card-header">
+      <h2>Priority queue — treatment order</h2>
+      <div class="table-controls">
+        <input type="text" id="searchInput" placeholder="Search ID or level..." oninput="filterTable()" />
+        <div class="filter-btns">
+          <button class="filter-btn active" data-filter="All" onclick="setFilter('All', this)">All</button>
+          <button class="filter-btn critical-btn" data-filter="Critical" onclick="setFilter('Critical', this)">Critical</button>
+          <button class="filter-btn moderate-btn" data-filter="Moderate" onclick="setFilter('Moderate', this)">Moderate</button>
+          <button class="filter-btn stable-btn" data-filter="Stable" onclick="setFilter('Stable', this)">Stable</button>
+        </div>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Rank</th>
+            <th>Patient ID</th>
+            <th>Age</th>
+            <th>Heart Rate</th>
+            <th>O₂ Sat %</th>
+            <th>Pain</th>
+            <th>Arrival</th>
+            <th>Score</th>
+            <th>Level</th>
+            <th>Wait Boost</th>
+          </tr>
+        </thead>
+        <tbody id="tableBody">
+          <tr><td colspan="10" class="loading-row">Loading patients...</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="table-footer" id="tableFooter"></div>
+  </section>
+
+  <!-- ── TEST CASES ─────────────────────────────────── -->
+  <section class="card tc-card">
+    <div class="card-header">
+      <h2>Validated test cases</h2>
+      <button class="btn btn-outline" onclick="loadTestCases()">↺ Re-run tests</button>
+    </div>
+    <div class="tc-grid" id="tcGrid">
+      <div class="loading-row">Running test cases...</div>
+    </div>
+  </section>
+
+  <!-- ── SCORING FORMULA REFERENCE ─────────────────── -->
+  <section class="card formula-card">
+    <div class="card-header">
+      <h2>Acuity score formula reference</h2>
+    </div>
+    <div class="formula-banner">
+      Acuity Score (0–100) = O₂ Penalty (≤50) + HR Deviation (≤25) + Pain Level (≤15) + Age Risk (≤10) + Wait Boost (+15)
+    </div>
+    <div class="formula-grid">
+      <div class="formula-item critical-border">
+        <div class="fi-title">O₂ Saturation <span class="fi-weight">≤ 50 pts</span></div>
+        <div class="fi-rows">
+          <div class="fi-row critical-text">&lt; 85% → 50 pts</div>
+          <div class="fi-row">85–89% → 40 pts</div>
+          <div class="fi-row">90–93% → 25 pts</div>
+          <div class="fi-row">94–95% → 10 pts</div>
+          <div class="fi-row muted">≥ 96% → 0 pts</div>
+        </div>
+      </div>
+      <div class="formula-item moderate-border">
+        <div class="fi-title">Heart Rate <span class="fi-weight">≤ 25 pts</span></div>
+        <div class="fi-rows">
+          <div class="fi-row critical-text">&gt;150 or &lt;40 → 25 pts</div>
+          <div class="fi-row">&gt;130 or &lt;50 → 18 pts</div>
+          <div class="fi-row">&gt;110 or &lt;55 → 10 pts</div>
+          <div class="fi-row">&gt;100 or &lt;60 → 5 pts</div>
+          <div class="fi-row muted">Normal → 0 pts</div>
+        </div>
+      </div>
+      <div class="formula-item teal-border">
+        <div class="fi-title">Pain Level <span class="fi-weight">≤ 15 pts</span></div>
+        <div class="fi-rows">
+          <div class="fi-row critical-text">9–10 → 15 pts</div>
+          <div class="fi-row">7–8 → 10 pts</div>
+          <div class="fi-row">5–6 → 5 pts</div>
+          <div class="fi-row">3–4 → 2 pts</div>
+          <div class="fi-row muted">1–2 → 0 pts</div>
+        </div>
+      </div>
+      <div class="formula-item stable-border">
+        <div class="fi-title">Age Risk <span class="fi-weight">≤ 10 pts</span></div>
+        <div class="fi-rows">
+          <div class="fi-row">≥75 or ≤5 → 10 pts</div>
+          <div class="fi-row">≥65 or ≤12 → 6 pts</div>
+          <div class="fi-row">≥50 → 3 pts</div>
+          <div class="fi-row muted">Other → 0 pts</div>
+        </div>
+      </div>
+      <div class="formula-item accent-border">
+        <div class="fi-title">Wait-Time Boost <span class="fi-weight">+15 pts</span></div>
+        <div class="fi-rows">
+          <div class="fi-row">Trigger: &gt; 2 hours wait</div>
+          <div class="fi-row">Only for Stable patients</div>
+          <div class="fi-row">Score += 15 (max 100)</div>
+          <div class="fi-row muted">Prevents starvation</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="footer">
+    MediQueue &nbsp;·&nbsp; SDG 3 – Good Health and Well-being &nbsp;·&nbsp; Python + Flask + Chart.js
+  </footer>
+
+  <script src="{{ url_for('static', filename='main.js') }}"></script>
+</body>
+</html>
